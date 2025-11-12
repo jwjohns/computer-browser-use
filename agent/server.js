@@ -5,6 +5,7 @@ import pty from "node-pty";
 import Docker from "dockerode";
 import CDP from "chrome-remote-interface";
 import { finished } from "stream/promises";
+import net from "net";
 
 const app = express();
 const PORT = 3000;
@@ -75,6 +76,30 @@ async function runDeskScript(script) {
   return execInDesk(["bash", "-lc", script]);
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function waitForPort(host, port, timeoutMs = 15000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      await new Promise((resolve, reject) => {
+        const socket = net.createConnection({ host, port }, () => {
+          socket.end();
+          resolve();
+        });
+        socket.once("error", (err) => {
+          socket.destroy();
+          reject(err);
+        });
+      });
+      return;
+    } catch {
+      await sleep(500);
+    }
+  }
+  throw new Error(`Timed out waiting for ${host}:${port}`);
+}
+
 async function ensureAutomationChrome() {
   if (automationInitPromise) return automationInitPromise;
 
@@ -103,6 +128,7 @@ echo "No Chromium-based browser available inside desk" >&2
 exit 1
 `;
     await runDeskScript(launchScript);
+    await waitForPort(automationConfig.host, automationConfig.port, 20000);
   })();
 
   try {
@@ -114,7 +140,7 @@ exit 1
 
 async function withAutomationSession(fn) {
   await ensureAutomationChrome();
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     let client;
     try {
       client = await CDP({ host: automationConfig.host, port: automationConfig.port });
@@ -132,7 +158,8 @@ async function withAutomationSession(fn) {
       return result;
     } catch (err) {
       automationTargetId = null;
-      if (attempt === 1) throw err;
+      if (attempt === 2) throw err;
+      await sleep(500);
     } finally {
       if (client) await client.close();
     }

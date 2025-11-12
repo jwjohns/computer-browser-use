@@ -58,6 +58,13 @@ A self-contained environment that exposes an Ubuntu LXDE desktop over noVNC and 
 ## DOM Automation (Option B Implemented)
 The stack now ships with a Chromium instance inside the `desk` container that runs with a persistent user profile and exposes the Chrome DevTools Protocol on port `9222`. This instance renders directly inside LXDE so any automated steps are visible via noVNC.
 
+> **Prerequisite:** ensure Chromium (or Google Chrome) is installed inside `desk`. For example:
+> ```bash
+> docker compose exec desk apt-get update
+> docker compose exec desk apt-get install -y chromium-browser xdotool
+> ```
+> The automation service will start Chromium automatically once these binaries are present.
+
 ### Available endpoints
 - `POST /automation/navigate { url, mirrorDesktop }` – Navigates Chromium to `url`. When `mirrorDesktop` is true (default) the window is focused inside LXDE.
 - `GET /automation/dom` – Returns a trimmed DOM snapshot (up to 200 visible nodes) including selectors, roles, text snippets, and bounding boxes.
