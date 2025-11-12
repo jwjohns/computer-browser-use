@@ -1,0 +1,26 @@
+{
+  "name": "agent-server",
+  "version": "1.1.1",
+  "type": "module",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dockerode": "^4.0.2",
+    "express": "^4.19.0",
+    "node-pty": "^1.0.0",
+    "ws": "^8.16.0"
+  },
+  "pnpm": {
+    "trustedDependencies": [
+      "cpu-features",
+      "node-pty",
+      "protobufjs",
+      "ssh2"
+    ],
+    "onlyBuiltDependencies": [
+      "cpu-features",
+      "node-pty",
+      "protobufjs",
+      "ssh2"
+    ]
+  }
+}

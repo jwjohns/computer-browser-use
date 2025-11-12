@@ -1,0 +1,22 @@
+services:
+  agent:
+    build:
+      context: ./agent
+    ports:
+      - "3000:3000"
+    environment:
+      - SHELL=/bin/bash
+    # dockerode talks to the host engine through the socket:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - desk
+
+  desk:
+    image: dorowu/ubuntu-desktop-lxde-vnc:latest
+    ports:
+      - "6080:80"    # noVNC in browser
+      - "5901:5900"  # optional VNC client
+    shm_size: "1gb"
+    environment:
+      - RESOLUTION=1920x1080
