@@ -13,6 +13,7 @@ const PORT = 3000;
 const automationConfig = {
   host: process.env.AUTOMATION_CHROME_HOST || "desk",
   port: Number(process.env.AUTOMATION_CHROME_PORT || "9222"),
+  internalPort: Number(process.env.AUTOMATION_CHROME_INTERNAL_PORT || "9333"),
   profileDir: process.env.AUTOMATION_CHROME_PROFILE || "/tmp/automation-profile",
   procLabel: process.env.AUTOMATION_CHROME_PROC || "automation-chrome"
 };
@@ -50,26 +51,34 @@ async function getDeskContainer(forceRefresh = false) {
   return cachedDeskContainer;
 }
 
-async function execInDesk(cmd, { env = [], cwd } = {}) {
-  const desk = await getDeskContainer();
-  const exec = await desk.exec({
-    Cmd: cmd,
-    Env: env,
-    WorkingDir: cwd,
-    AttachStdout: true,
-    AttachStderr: true
-  });
-  const stream = await exec.start({ hijack: true, stdin: false });
-  let output = "";
-  stream.on("data", (chunk) => {
-    output += chunk.toString();
-  });
-  await finished(stream);
-  const inspect = await exec.inspect();
-  if (inspect.ExitCode !== 0) {
-    throw new Error(`desk exec failed with code ${inspect.ExitCode}: ${output.trim()}`);
+async function execInDesk(cmd, { env = [], cwd } = {}, attempt = 0) {
+  try {
+    const desk = await getDeskContainer(attempt > 0);
+    const exec = await desk.exec({
+      Cmd: cmd,
+      Env: env,
+      WorkingDir: cwd,
+      AttachStdout: true,
+      AttachStderr: true
+    });
+    const stream = await exec.start({ hijack: true, stdin: false });
+    let output = "";
+    stream.on("data", (chunk) => {
+      output += chunk.toString();
+    });
+    await finished(stream);
+    const inspect = await exec.inspect();
+    if (inspect.ExitCode !== 0) {
+      throw new Error(`desk exec failed with code ${inspect.ExitCode}: ${output.trim()}`);
+    }
+    return output;
+  } catch (err) {
+    if (attempt === 0 && /No such container/i.test(String(err))) {
+      cachedDeskContainer = null;
+      return execInDesk(cmd, { env, cwd }, attempt + 1);
+    }
+    throw err;
   }
-  return output;
 }
 
 async function runDeskScript(script) {
@@ -116,23 +125,27 @@ async function ensureAutomationChrome() {
     const launchScript = `
 set -euo pipefail
 ${detectDisplayFn}
-if pgrep -f '${automationConfig.procLabel}' >/dev/null 2>&1; then
-  exit 0
-fi
+
+fuser -k ${automationConfig.internalPort}/tcp >/dev/null 2>&1 || true
+fuser -k ${automationConfig.port}/tcp >/dev/null 2>&1 || true
 
 DISPLAY=$(detect_display)
 for candidate in chromium-browser google-chrome google-chrome-stable; do
   if command -v "$candidate" >/dev/null 2>&1; then
     mkdir -p ${automationConfig.profileDir}
-    DISPLAY=$DISPLAY nohup "$candidate" \\
-      --remote-debugging-address=0.0.0.0 \\
-      --remote-debugging-port=${automationConfig.port} \\
-      --user-data-dir=${automationConfig.profileDir} \\
-      --no-sandbox --disable-dev-shm-usage --disable-gpu --start-maximized about:blank \\
+    DISPLAY=$DISPLAY nohup "$candidate" \
+      --remote-debugging-address=127.0.0.1 \
+      --remote-debugging-port=${automationConfig.internalPort} \
+      --remote-allow-origins=* \
+      --user-data-dir=${automationConfig.profileDir} \
+      --no-sandbox --disable-dev-shm-usage --disable-gpu --start-maximized about:blank \
       >/tmp/${automationConfig.procLabel}.log 2>&1 &
+    nohup socat TCP-LISTEN:${automationConfig.port},fork,reuseaddr TCP:127.0.0.1:${automationConfig.internalPort} \
+      >/tmp/${automationConfig.procLabel}-proxy.log 2>&1 &
     exit 0
   fi
 done
+
 echo "No Chromium-based browser available inside desk" >&2
 exit 1
 `;
@@ -150,35 +163,41 @@ exit 1
     automationInitPromise = null;
   }
 }
-
 async function withAutomationSession(fn) {
   await ensureAutomationChrome();
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    let client;
+    let browserClient;
+    let pageClient;
     try {
-      client = await CDP({ host: automationConfig.host, port: automationConfig.port });
-      const { Target } = client;
+      const version = await CDP.Version({ host: automationConfig.host, port: automationConfig.port });
+      if (!version.webSocketDebuggerUrl) {
+        throw new Error("No browser websocket available");
+      }
+
+      browserClient = await CDP({ target: version.webSocketDebuggerUrl });
+      const { Target } = browserClient;
+
       if (!automationTargetId) {
         const { targetId } = await Target.createTarget({ url: "about:blank" });
         automationTargetId = targetId;
       }
-      const { sessionId } = await Target.attachToTarget({ targetId: automationTargetId, flatten: true });
-      const session = client.session(sessionId);
-      await session.Page.enable();
-      await session.Runtime.enable();
-      const result = await fn(session);
-      await Target.detachFromTarget({ sessionId });
+
+      pageClient = await CDP({ host: automationConfig.host, port: automationConfig.port, target: automationTargetId });
+      await pageClient.Page.enable();
+      await pageClient.Runtime.enable();
+
+      const result = await fn(pageClient);
       return result;
     } catch (err) {
       automationTargetId = null;
       if (attempt === 2) throw err;
       await sleep(500);
     } finally {
-      if (client) await client.close();
+      if (browserClient) await browserClient.close();
+      if (pageClient) await pageClient.close();
     }
   }
 }
-
 function waitForEvent(session, eventName, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
     const handler = () => {
