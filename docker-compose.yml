@@ -17,6 +17,7 @@ services:
     ports:
       - "6080:80"    # noVNC in browser
       - "5901:5900"  # optional VNC client
+      - "9222:9222"  # Chrome DevTools (automation)
     shm_size: "1gb"
     environment:
       - RESOLUTION=1920x1080

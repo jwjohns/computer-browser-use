@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
 import LiveTerminal from './LiveTerminal';
 import LiveDesktop from './LiveDesktop';
+import AutomationPanel from './AutomationPanel';
 import { agentHttpBaseUrl } from './config';
 
 function Tabs({ tabs, active, onChange }) {
@@ -91,7 +92,7 @@ function App() {
         </button>
       </div>
 
-      <Tabs tabs={['Desktop', 'Terminal']} active={tab} onChange={setTab} />
+      <Tabs tabs={['Desktop', 'Terminal', 'Automation']} active={tab} onChange={setTab} />
 
       <div>
         {tab === 'Desktop' && <LiveDesktop />}
@@ -99,6 +100,12 @@ function App() {
           <div>
             <div style={{ marginBottom: 8, fontWeight: 600 }}>Terminal</div>
             <LiveTerminal />
+          </div>
+        )}
+        {tab === 'Automation' && (
+          <div>
+            <div style={{ marginBottom: 8, fontWeight: 600 }}>DOM Automation</div>
+            <AutomationPanel />
           </div>
         )}
       </div>

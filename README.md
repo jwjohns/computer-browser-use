@@ -27,7 +27,7 @@ A self-contained environment that exposes an Ubuntu LXDE desktop over noVNC and 
    - Terminal WS: `ws://localhost:3000/pty`
    - Tool endpoint: `POST http://localhost:3000/tool/open_url` with `{ "url": "https://example.com" }`
 
-2. **Web UI (optional dev server)**
+   2. **Web UI (optional dev server)**
    ```bash
    cd webui
    pnpm install
@@ -36,6 +36,7 @@ A self-contained environment that exposes an Ubuntu LXDE desktop over noVNC and 
    ```
    - **Desktop tab** – Embedded noVNC session.
    - **Terminal tab** – Live shell via WebSocket + Xterm.js.
+   - **Automation tab** – DOM-aware controls that drive the Chromium instance via the DevTools protocol (details below).
    - **Open URL bar** – Calls `/tool/open_url` and focuses the desktop so you can watch the launch.
 
 3. **Shutdown**
@@ -54,6 +55,22 @@ A self-contained environment that exposes an Ubuntu LXDE desktop over noVNC and 
 3. The agent locates the `desk` container, auto-detects the active X11 display, selects an installed browser (`firefox`, `chromium`, `google-chrome`, etc.), and launches it via `DISPLAY=<detected> nohup <browser> <url>`.
 4. LXDE opens the page and the embedded desktop iframe reflects the change instantly.
 
+## DOM Automation (Option B Implemented)
+The stack now ships with a Chromium instance inside the `desk` container that runs with a persistent user profile and exposes the Chrome DevTools Protocol on port `9222`. This instance renders directly inside LXDE so any automated steps are visible via noVNC.
+
+### Available endpoints
+- `POST /automation/navigate { url, mirrorDesktop }` – Navigates Chromium to `url`. When `mirrorDesktop` is true (default) the window is focused inside LXDE.
+- `GET /automation/dom` – Returns a trimmed DOM snapshot (up to 200 visible nodes) including selectors, roles, text snippets, and bounding boxes.
+- `POST /automation/action { selector, action, text }` – Executes DOM-level actions through CDP. Supported actions today are `click` and `type`.
+
+These APIs are wired into the new Automation tab in the UI, providing a manual front-end for the workflow Manus-style agents use:
+
+1. Navigate to a page.
+2. Refresh the DOM snapshot to inspect elements.
+3. Fire DOM-level actions (click/type) directly from the UI to validate selectors.
+
+You can also script these endpoints yourself—e.g., pipe the DOM snapshot into a reasoning model that selects the next element, then call `/automation/action` to execute it.
+
 ## Extending the Stack
 The baseline experience is manual but intentionally structured so you can add automation.
 
@@ -70,11 +87,12 @@ The baseline experience is manual but intentionally structured so you can add au
 > **Reality check:** Vision-language models still struggle with pixel-perfect desktop control. Treat them as "describe / highlight" tools unless you pair them with other signals.
 
 ### Option B – DOM-Driven Automation (Manus-style)
-1. Launch Chromium in `desk` with `--remote-debugging-port=9222` or run a headless Playwright sidecar.
-2. From the agent, connect via the Chrome DevTools Protocol to retrieve DOM nodes, bounding boxes, and accessible labels.
-3. Feed the structured element list into a planner model (local or hosted) to select the next action.
-4. Execute the action via CDP (`Runtime.evaluate`, `Input.dispatchMouseEvent`, etc.) and mirror it in LXDE for observability.
-5. Iterate until the workflow completes.
+✅ **Implemented in this repository.** The automation tab and `automation/*` endpoints already do the heavy lifting:
+1. Chromium (visible inside LXDE) runs with `--remote-debugging-port=9222`.
+2. The agent connects via CDP to extract DOM metadata and expose it via `/automation/dom`.
+3. LLMs or humans can inspect/score the structured list.
+4. `/automation/action` executes clicks/typing through CDP, instantly mirroring the interaction in LXDE.
+5. Repeat until the workflow completes.
 
 This hybrid—DOM introspection plus deterministic actuators—matches how Manus AI, Augment, and similar systems achieve reliability compared to screenshot-only reasoning.
 
