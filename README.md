@@ -3,7 +3,7 @@
 A self-contained environment that exposes an Ubuntu LXDE desktop over noVNC and an interactive Bash shell over WebSocket. The goal is to mirror the "agent computer" experience used in research demos while keeping the deployment simple, reproducible, and free of GHCR dependencies.
 
 ## Architecture
-- **desk** (Docker) – `dorowu/ubuntu-desktop-lxde-vnc`. Runs the GUI session, serves noVNC on `6080`, and VNC on `5901`.
+- **desk** (Docker) – Custom image built from `dorowu/ubuntu-desktop-lxde-vnc` with `chromium-browser` + `xdotool` preinstalled. Runs the GUI session, serves noVNC on `6080`, VNC on `5901`, and exposes the Chrome DevTools Protocol on `9222` for automation.
 - **agent** (Node 20) – Express server that exposes:
   - `GET /health` for readiness checks
   - `WS /pty` backed by `node-pty` for interactive shells
@@ -19,7 +19,7 @@ A self-contained environment that exposes an Ubuntu LXDE desktop over noVNC and 
 ## Quick Start
 1. **Containers**
    ```bash
-   docker compose build --no-cache
+   docker compose build --no-cache   # builds the customized desk image
    docker compose up -d
    curl http://localhost:3000/health   # => {"ok":true}
    ```

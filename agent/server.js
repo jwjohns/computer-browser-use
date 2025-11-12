@@ -100,6 +100,15 @@ async function waitForPort(host, port, timeoutMs = 15000) {
   throw new Error(`Timed out waiting for ${host}:${port}`);
 }
 
+async function tailAutomationLog(lines = 80) {
+  try {
+    const log = await runDeskScript(`tail -n ${lines} /tmp/${automationConfig.procLabel}.log 2>/dev/null || true`);
+    return log.trim();
+  } catch {
+    return "";
+  }
+}
+
 async function ensureAutomationChrome() {
   if (automationInitPromise) return automationInitPromise;
 
@@ -128,7 +137,11 @@ echo "No Chromium-based browser available inside desk" >&2
 exit 1
 `;
     await runDeskScript(launchScript);
-    await waitForPort(automationConfig.host, automationConfig.port, 20000);
+    await waitForPort(automationConfig.host, automationConfig.port, 20000).catch(async (err) => {
+      const log = await tailAutomationLog();
+      const detail = log ? `\nRecent automation log:\n${log}` : "";
+      throw new Error(`Chrome DevTools not reachable (${err.message}).${detail}`);
+    });
   })();
 
   try {

@@ -13,7 +13,9 @@ services:
       - desk
 
   desk:
-    image: dorowu/ubuntu-desktop-lxde-vnc:latest
+    build:
+      context: ./desk
+    image: computer-browser-use-desk:latest
     ports:
       - "6080:80"    # noVNC in browser
       - "5901:5900"  # optional VNC client
