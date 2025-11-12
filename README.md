@@ -1,88 +1,87 @@
+# Interactive VNC + Terminal Stack
 
-# Interactive VNC + Terminal (No GHCR)
+A self-contained environment that exposes an Ubuntu LXDE desktop over noVNC and an interactive Bash shell over WebSocket. The goal is to mirror the "agent computer" experience used in research demos while keeping the deployment simple, reproducible, and free of GHCR dependencies.
 
-Ready-to-run stack that exposes an LXDE desktop over noVNC plus an interactive bash shell over WebSocket. The UI mirrors the reference build that was shared previously and the project now matches those exact run instructions.
+## Architecture
+- **desk** (Docker) – `dorowu/ubuntu-desktop-lxde-vnc`. Runs the GUI session, serves noVNC on `6080`, and VNC on `5901`.
+- **agent** (Node 20) – Express server that exposes:
+  - `GET /health` for readiness checks
+  - `WS /pty` backed by `node-pty` for interactive shells
+  - `POST /tool/open_url` for browser launches inside `desk`
+  The container mounts `/var/run/docker.sock`, letting it exec directly inside `desk`.
+- **webui** (React + Vite) – Single-page app that embeds the desktop iframe, renders the terminal via Xterm.js, and fronts the tool endpoints.
 
-## Prereqs
-- Docker Desktop (tested on macOS)
-- Node 18+ if you want to run the React dev server
+## Prerequisites
+- Docker Desktop (validated on macOS; Linux/Windows should work with minor adjustments)
+- Node.js 18+ if you want to run the web UI dev server
+- pnpm (Corepack-enabled Node runtimes include it automatically)
 
-## Build + Start the containers
-```bash
-docker compose build --no-cache
-docker compose up -d
-curl http://localhost:3000/health   # → {"ok":true}
-```
+## Quick Start
+1. **Containers**
+   ```bash
+   docker compose build --no-cache
+   docker compose up -d
+   curl http://localhost:3000/health   # => {"ok":true}
+   ```
+   - Desktop: <http://localhost:6080>
+   - Terminal WS: `ws://localhost:3000/pty`
+   - Tool endpoint: `POST http://localhost:3000/tool/open_url` with `{ "url": "https://example.com" }`
 
-What you get:
-- Desktop (noVNC): http://localhost:6080 and embedded inside the UI
-- Terminal WebSocket: ws://localhost:3000/pty
-- Tool endpoint: POST http://localhost:3000/tool/open_url with `{ "url": "https://example.com" }`
+2. **Web UI (optional dev server)**
+   ```bash
+   cd webui
+   pnpm install
+   pnpm run dev
+   # open http://localhost:5173
+   ```
+   - **Desktop tab** – Embedded noVNC session.
+   - **Terminal tab** – Live shell via WebSocket + Xterm.js.
+   - **Open URL bar** – Calls `/tool/open_url` and focuses the desktop so you can watch the launch.
 
-Stop everything with `docker compose down` when you are done.
+3. **Shutdown**
+   ```bash
+   docker compose down
+   ```
 
-## Run the Web UI
-```bash
-cd webui
-pnpm install
-pnpm run dev
-# open http://localhost:5173
-```
+## Operational Notes
+- The default `desk` image is pulled from Docker Hub, avoiding GHCR authentication issues.
+- The web UI automatically points at the agent host; override with `VITE_AGENT_URL` when reverse proxying or tunneling.
+- CORS is permissive by default so you can access the UI from any LAN host. Set `AGENT_STRICT_CORS=true` and populate `AGENT_ALLOWED_ORIGINS=http://your-host:5173` (comma-separated) to lock it down.
 
-### Desktop tab
-Shows the live LXDE desktop (the same one you can open directly via http://localhost:6080).
+## Request Flow (Open URL)
+1. User submits a URL in the web UI.
+2. The UI POSTs the value to the agent.
+3. The agent locates the `desk` container, auto-detects the active X11 display, selects an installed browser (`firefox`, `chromium`, `google-chrome`, etc.), and launches it via `DISPLAY=<detected> nohup <browser> <url>`.
+4. LXDE opens the page and the embedded desktop iframe reflects the change instantly.
 
-### Terminal tab
-Connects to bash over WebSocket (`ws://localhost:3000/pty`). Type directly in the embedded terminal.
+## Extending the Stack
+The baseline experience is manual but intentionally structured so you can add automation.
 
-### Open URL bar
-Posts to `/tool/open_url`, launching the requested page inside the LXDE desktop session.
+### Option A – Screenshot + Local VLM Loop (e.g., Ollama)
+1. Install helpers inside `desk`:
+   ```bash
+   docker compose exec desk apt-get update
+   docker compose exec desk apt-get install -y imagemagick xdotool
+   ```
+2. Add a helper in `agent/server.js` that execs `import -window root`, base64-encodes the PNG, and returns it.
+3. Create `POST /tool/vlm_navigate` that collects the screenshot, calls your Ollama model (`http://host.docker.internal:11434/api/generate`, `model: "llava"` or similar), and returns the response.
+4. Use `xdotool` exec helpers to press keys or click coordinates based on the model output.
 
-## Notes
-- The stack uses `dorowu/ubuntu-desktop-lxde-vnc:latest` from Docker Hub so no GHCR login is required.
-- If you serve the UI from anywhere other than localhost you can override the agent URL via `VITE_AGENT_URL` before running `pnpm run dev`/`pnpm run build`.
-- Running the UI from a different origin works out of the box. If you need to lock it down, export `AGENT_STRICT_CORS=true` and provide `AGENT_ALLOWED_ORIGINS=http://your-host:5173` (comma separated) before starting the agent container.
+> **Reality check:** Vision-language models still struggle with pixel-perfect desktop control. Treat them as "describe / highlight" tools unless you pair them with other signals.
 
-## How it works
-- **desk** container: LXDE desktop exposed through noVNC on port 6080, plus a VNC server on 5901. All GUI activity happens here.
-- **agent** container: Node/Express server that exposes `GET /health`, `WS /pty` (TTY over `node-pty`), and `POST /tool/open_url`. The agent talks to Docker via the mounted socket so it can exec commands inside `desk` without extra services.
-- **webui**: React/Vite SPA that embeds the noVNC iframe, streams terminal data with Xterm.js, and wires the Open URL input to the agent.
+### Option B – DOM-Driven Automation (Manus-style)
+1. Launch Chromium in `desk` with `--remote-debugging-port=9222` or run a headless Playwright sidecar.
+2. From the agent, connect via the Chrome DevTools Protocol to retrieve DOM nodes, bounding boxes, and accessible labels.
+3. Feed the structured element list into a planner model (local or hosted) to select the next action.
+4. Execute the action via CDP (`Runtime.evaluate`, `Input.dispatchMouseEvent`, etc.) and mirror it in LXDE for observability.
+5. Iterate until the workflow completes.
 
-### Request flow
-1. User presses **Open** in the UI.
-2. Web UI POSTs `{ url }` to `http://<agent>:3000/tool/open_url`.
-3. Agent locates the `desk` container and runs a shell helper that auto-detects the active X11 display, finds an installed browser, and launches it via `DISPLAY=<detected> nohup <browser> <url>`.
-4. Browser window shows up inside LXDE; the embedded noVNC iframe reflects the new page immediately.
+This hybrid—DOM introspection plus deterministic actuators—matches how Manus AI, Augment, and similar systems achieve reliability compared to screenshot-only reasoning.
 
-## Extending with local automation / VLMs
-The current build is deterministic and manual, but it was structured so you can bolt on smarter tooling:
+### Suggested API Surface to Add
+- `POST /tool/screenshot` – Returns a base64 PNG capture from LXDE.
+- `POST /tool/keyboard` / `POST /tool/mouse` – Simple wrappers around `xdotool`/`ydotool` for scripted input.
+- `POST /tool/dom_snapshot` – Streams the DOM/element metadata from a debugger connection.
+- `POST /tool/automation` – High-level orchestration endpoint that can chain LLM calls and actuators.
 
-### 1. Screenshot + local VLM (Ollama) loop
-1. Install helpers inside `desk`: `docker compose exec desk apt-get update && apt-get install -y imagemagick xdotool`.
-2. Add a helper in `agent/server.js` that execs `import -window root` (from ImageMagick) and base64-encodes the screenshot.
-3. Create a new endpoint, e.g. `POST /tool/vlm_navigate`, that:
-   - captures the screenshot
-   - POSTs it to your Ollama vision model (`http://host.docker.internal:11434/api/generate`, `model: "llava"` or any other vision-capable model you pulled)
-   - returns the model response to the UI or action planner
-4. Use `xdotool` exec helpers to press keys/click regions based on the VLM output.
-
-> **Reality check:** pure VLMs still struggle with fine-grained UI control. Treat this as “describe what’s on screen” rather than “fully navigate,” or combine with DOM instrumentation as described below.
-
-### 2. DOM-driven automation (similar to Manus)
-1. Launch Chromium inside `desk` with `--remote-debugging-port=9222` or run a headless Playwright sidecar.
-2. From the agent, use the Chrome DevTools Protocol (via packages like `chrome-remote-interface` or Playwright’s API) to:
-   - capture the DOM tree
-   - annotate nodes with bounding boxes/text/ARIA roles under 1–2k tokens
-3. Feed that structured list into an LLM (local or remote) that can rank elements and pick the next action.
-4. Execute the chosen action through the debugger connection (e.g., `Runtime.evaluate` to click, type, etc.) and mirror it on the LXDE browser for visibility.
-5. Repeat until the task completes.
-
-This hybrid approach—DOM introspection + deterministic actuators—matches what tools like Manus AI, Augment, and others do today and is far more reliable than screenshot-only reasoning.
-
-### 3. Suggested endpoints to add
-- `POST /tool/screenshot` → returns base64 PNG from LXDE.
-- `POST /tool/keyboard` / `/tool/mouse` → wrappers around `xdotool` or `ydotool` inside `desk`.
-- `POST /tool/dom_snapshot` → fetches DOM via CDP/Playwright.
-- `POST /tool/automation` → orchestrates LLM calls plus actuator invocations.
-
-Feel free to extend the agent with those endpoints; the Docker socket mount already grants the needed access to exec commands in the `desk` container.
+The Docker socket mount already gives the agent container the privileges it needs to implement all of the above.
